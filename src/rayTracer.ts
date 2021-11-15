@@ -49,6 +49,122 @@ export class Color {
         }
     }
 }
+interface Object {
+    origin : Vector,
+    radius : number,
+    norm : Vector,
+    dr : number,
+    dg : number,
+    db : number,
+    k_ambient : number,
+    k_specular : number,
+    specular_pow : number,
+    find_t(ray:Ray) : number[];
+}
+export class Sphere implements Object {
+    public norm : Vector = new Vector(0,0,0)
+    constructor(public origin: Vector, public radius: number, 
+        public dr: number, public dg: number, public db: number, 
+        public k_ambient: number, public k_specular: number, public specular_pow: number) {
+            
+    }
+    public find_t (ray: Ray): number[] {
+        var ex = ray.start.x;
+        var ey = ray.start.y;
+        var ez = ray.start.z;
+
+        var dx = ray.dir.x;
+        var dy = ray.dir.y;
+        var dz = ray.dir.z;
+
+        var sx = this.origin.x
+        var sy = this.origin.y
+        var sz = this.origin.z
+
+        var radius = this.radius;
+
+        var a = dx * dx + dy * dy + dz * dz;
+        var b = 2 * ((dx * (ex - sx)) + (dy * (ey - sy)) + (dz * (ez - sz)));
+        var c = (ex - sx) * (ex - sx) + (ey - sy) * (ey - sy) + (ez - sz) * (ez - sz) - radius * radius;
+
+        var discriminant = b * b - 4 * a * c;
+
+        var root : number[] = []
+
+        if (discriminant < 0) {
+            return root;
+        }
+        if (discriminant == 0) {
+            root.push((b * -1) / (2 * a));
+            return root;
+        }
+        if (discriminant > 0) {
+            root.push(((b * -1) + Math.sqrt(discriminant)) / (2 * a));
+            root.push(((b * -1) - Math.sqrt(discriminant)) / (2 * a));
+            return root;
+        }
+        return root;
+    }
+}
+
+export class Disk implements Object {
+    constructor (public origin : Vector, public radius : number, public norm : Vector, public dr : number, public dg : number, public db : number, public k_ambient : number, public k_specular : number, public specular_pow : number) {
+    }
+    public find_t(ray : Ray) : number[] {
+        var root : number[] = []
+        var temp = 0;
+        if (this.findIntersect(this.norm, this.origin, ray.start, ray.dir, temp)) {
+            var den = Vector.dot(this.norm, ray.dir)
+            var pl = Vector.minus(this.origin, ray.start)
+            temp = Vector.dot(pl, this.norm) / den
+            var p = Vector.plus(ray.start, Vector.times(temp, ray.dir))
+            var v = Vector.minus(p, this.origin)
+            var d = Vector.dot(v,v)
+            if (Math.sqrt(d) <= this.radius) {
+                root.push(temp) 
+            }
+        }
+        return root
+    }
+
+    findIntersect(n : Vector, p0 :Vector, l0 : Vector, l : Vector, t: number) : boolean {
+        var d = Vector.dot(n, l)
+        if (greaterEpsilon(Math.abs(d))) {
+            var pl = Vector.minus(p0, l0)
+            t = Vector.dot(pl, n) / d
+            return (t >= 0)
+        }
+        return false
+    }
+}
+
+export class Light {
+    constructor(public color: Color, public x: number, public y: number, public z: number) {
+    }
+}
+
+export class AmbientLight {
+    constructor(public color: Color) {
+    }
+}
+
+export class AreaLight {
+    constructor (public color : Color, public position : Vector, public u : Vector, public v : Vector) {
+    }
+}
+
+export class Camera {
+    public w : Vector;
+    public u : Vector;
+    public v : Vector;
+    constructor(public pos: Vector,
+                public lookat: Vector,
+                public up: Vector) {
+                    this.w = Vector.times(-1, Vector.norm(Vector.minus(this.pos, lookat)));
+                    this.u = Vector.norm(Vector.cross(this.w, up));
+                    this.v = Vector.cross(this.w, this.u);
+                }
+}
 
 interface Ray {
     start: Vector;
@@ -60,6 +176,15 @@ interface Sample {
     s: number,
     t: number
 }
+
+var lights: Light[];
+var ambientLight: AmbientLight;
+var objects: Object[];
+var camera: Camera;
+var backgroundColor: Color;
+var fov: number;
+var areaLights : AreaLight[] = [];
+
 
 // A class for our application state and functionality
 class RayTracer {
@@ -117,11 +242,48 @@ class RayTracer {
     // The distribution would use the jitter parameters to create either a regularly spaced or 
     // randomized set of samples.
     private createDistribution(): Sample[] {
+        var sam = [];
+        var increment = 2 / this.samples
+        var x = 0;
+        var y = 0;
+        for (var i = 0; i < 2; i += increment) {
+            for (var j = 0; j < 2; j += increment) {
+                if (this.jitter) {
+                    x = Math.random() * 0.5
+                    y = Math.random() * 0.5
+                } else {
+                    x = increment / 2
+                    y = increment/ 2
+                }
+                sam.push({s : i + x - 1, t: j + y - 1})
+            }
+        }
+        return sam
     }
 
     // HINT: SUGGESTED BUT NOT REQUIRED, INTERNAL METHOD
     // like traceRay, but returns on first hit. More efficient than traceRay for detecting if "in shadow"
     private testRay(ray: Ray) {
+        var tmin = 99999999;
+        for (var i = 0; i < objects.length; i ++) {
+            var int = objects[i].find_t(ray)
+            if (int.length == 1) {
+                if (int[0] > 0 && int[0] < tmin) {
+                    return true
+                }
+            } else if (int.length == 2) {
+                if (int[0] > 0 && int[1] < 0) {
+                    return true
+                }
+                if (int[0] < 0 && int[1] > 0) {
+                    return true
+                }
+                if (int[0] > 0 && int[1] > 0) {
+                    return true
+                }
+            }
+        }
+        return false;
     }
 
     // NEW COMMANDS FOR PART B
@@ -135,11 +297,13 @@ class RayTracer {
               nx: number, ny: number, nz: number, dr: number, dg: number, db: number, 
               k_ambient: number, k_specular: number, specular_pow: number,
               vx?: number, vy?: number, vz?: number) {
+                objects.push(new Disk(new Vector(x,y,z), radius, new Vector(nx,ny,nz), dr, dg, db, k_ambient, k_specular, specular_pow));
     }
 
     // create a new area light source
     area_light (r: number, g: number, b: number, x: number, y: number, z: number, 
                 ux: number, uy: number, uz: number, vx: number, vy: number, vz: number) {
+                    areaLights.push(new AreaLight(new Color(r,g,b), new Vector(x,y,z), new Vector(ux, uy, uz), new Vector(vx,vy,vz)))
     }
 
     set_sample_level (num: number) {
@@ -185,24 +349,35 @@ class RayTracer {
 
     // clear out all scene contents
     reset_scene() {
+        this.set_eye(0,0,0,0,0,-1,0,1,0)
+        this.set_fov(90);
+        this.ambient_light(0,0,0);
+        this.set_background(1,1,1)
+        objects = [];
+        lights= [];
+        areaLights = [];
     }
 
     // create a new point light source
     new_light (r: number, g: number, b: number, x: number, y: number, z: number) {
+        lights.push(new Light(new Color(r,g,b),x,y,z));
     }
 
     // set value of ambient light source
     ambient_light (r: number, g: number, b: number) {
+        ambientLight = new AmbientLight(new Color(r,g,b));
     }
 
     // set the background color for the scene
     set_background (r: number, g: number, b: number) {
+        backgroundColor = new Color(r,g,b);
     }
 
     // set the field of view
     DEG2RAD = (Math.PI/180)
 
     set_fov (theta: number) {
+        fov = theta * this.DEG2RAD;
     }
 
     // // set the position of the virtual camera/eye
@@ -214,6 +389,7 @@ class RayTracer {
     set_eye(x1: number, y1: number, z1: number, 
             x2: number, y2: number, z2: number, 
             x3: number, y3: number, z3: number) {
+                camera = new Camera(new Vector(x1, y1, z1), new Vector(x2, y2, z2), Vector.norm(new Vector(x3, y3, z3)));
     }
 
     // create a new sphere.
@@ -226,15 +402,139 @@ class RayTracer {
                 dr: number, dg: number, db: number, 
                 k_ambient: number, k_specular: number, specular_pow: number, 
                 vx?: number, vy?: number, vz?: number) {
+                    objects.push(new Sphere(new Vector(x,y,z),radius,dr,dg,db,k_ambient,k_specular,specular_pow));
     }
 
     // INTERNAL METHODS YOU MUST IMPLEMENT
 
     // create an eye ray based on the current pixel's position
     private eyeRay(i: number, j: number): Ray {
+        var d = 1 / (Math.tan( fov/2 ));
+        var aspect_ratio = this.width/this.height
+        var us = (-1 + ((2 * (i + 0.5)) / this.screenWidth)) * aspect_ratio
+        var vs = -1 + ((2 * (j + 0.5)) / this.screenHeight);
+        var direct = Vector.norm(Vector.plus(Vector.times(d, camera.w), Vector.plus(Vector.times(us, camera.u), Vector.times(vs, camera.v))))
+        var ray : Ray = {start: camera.pos, dir : direct};
+        return ray;
     }
 
     private traceRay(ray: Ray, depth: number = 0): Color {
+        var tmin = 99999999;
+        var closestObject = objects[0];
+        var pixelColor: Color = backgroundColor;
+        var kala: Color;
+        for (var i = 0; i < objects.length; i++) {
+            var t: number[] = objects[i].find_t(ray);
+            if (t.length == 0) {
+                tmin = tmin;
+                closestObject = closestObject;
+            } else if (t.length == 1) {
+                
+                if (t[0] > 0 && t[0] < tmin) {
+                    tmin = t[0]
+                    closestObject = objects[i]
+                }
+            } else if (t.length == 2) {
+                var temp = 0;
+                if (t[0] > 0 && t[1] < 0) {
+                    temp = t[0]
+                    if (temp < tmin) {
+                        tmin = temp
+                        closestObject = objects[i]
+                    }
+                } else if (t[0] < 0 && t[1] > 0) {
+                    temp = t[1]
+                    if (temp < tmin) {
+                        tmin = temp
+                        closestObject = objects[i]
+                    }
+                } else if (t[0] > 0 && t[1] > 0) {
+                    temp = Math.min(t[0], t[1])
+                    if (temp < tmin) {
+                        tmin = temp
+                        closestObject = objects[i]
+                    }
+                }
+            }
+        }
+        if (tmin == 99999999) {
+            pixelColor = backgroundColor;
+        } else {
+            var vecs = this.createDistribution();
+            pixelColor = new Color(closestObject.dr, closestObject.dg, closestObject.db)
+            var light = new Color(0,0,0)
+            var aLight = new Color (0,0,0)
+            for(var i = 0; i < lights.length; i++) {
+                if (closestObject instanceof Disk) {
+                    var N = closestObject.norm
+                } else {
+                    var N = Vector.norm(Vector.minus(Vector.plus(ray.start, Vector.times(tmin, ray.dir)), closestObject.origin))
+                }
+                var L = Vector.norm(Vector.minus(new Vector(lights[i].x, lights[i].y, lights[i].z) , Vector.plus(ray.start, Vector.times(tmin, ray.dir))))
+                var NL = Math.max(0, Vector.dot(N,L))
+                var V = Vector.norm(Vector.minus(ray.start, Vector.plus(ray.start, Vector.times(tmin, ray.dir))))
+                var R = Vector.plus(Vector.times(-1, V), Vector.times(2 * Vector.dot(V, N), N))
+                var tempRay : Ray = {start: Vector.plus(Vector.plus(ray.start, Vector.times(tmin, ray.dir)), Vector.times(0.001, N)), dir: L}
+                var inShad = this.testRay(tempRay)
+                if (!inShad) {
+                    var kd = new Color(closestObject.dr,closestObject.dg,closestObject.db)
+                    var cont = Color.scale(NL, kd)
+                    cont = Color.times(cont, lights[i].color)
+                    var ks = closestObject.k_specular
+                    var scale = Color.scale(ks, lights[i].color)
+                    var specpow = Math.max(0, Vector.dot(L, R))
+                    specpow = Math.pow(specpow, closestObject.specular_pow)
+                    var specl = Color.scale(specpow, scale)
+                    var sum = Color.plus(cont, specl)
+                    light = Color.plus(light, sum)
+                }
+            }
+            for (var i = 0; i < areaLights.length; i++) {
+                var adc = new Color (0,0,0)
+                var msc = new Color (0,0,0)
+                for (let temp of vecs) {
+                    var pos = Vector.plus(areaLights[i].position, Vector.plus(Vector.times(temp.s, areaLights[i].u), Vector.times(temp.t, areaLights[i].v)))
+                    if (closestObject instanceof Disk) {
+                        var N = closestObject.norm
+                    } else {
+                        var N = Vector.norm(Vector.minus(Vector.plus(ray.start, Vector.times(tmin, ray.dir)), closestObject.origin))
+                    }
+                    var L = Vector.norm(Vector.minus(pos, Vector.plus(ray.start, Vector.times(tmin, ray.dir))))
+                    var NL = Math.max(0, Vector.dot(N,L))
+                    var V = Vector.norm(Vector.minus(ray.start, Vector.plus(ray.start, Vector.times(tmin, ray.dir))))
+                    var R = Vector.plus(Vector.times(-1, V), Vector.times(2 * Vector.dot(V, N), N))
+                    var tempRay : Ray = {start: Vector.plus(Vector.plus(ray.start, Vector.times(tmin, ray.dir)), Vector.times(0.001, N)), dir: L}
+                    var inShad = this.testRay(tempRay)
+                    if (!inShad) {
+                        var kd = new Color(closestObject.dr,closestObject.dg,closestObject.db)
+                        var cont = Color.scale(NL, kd)
+                        cont = Color.times(cont, new Color(areaLights[i].color.r, areaLights[i].color.g, areaLights[i].color.b))
+                        var ks = closestObject.k_specular
+                        var scale = Color.scale(ks, new Color(areaLights[i].color.r, areaLights[i].color.g, areaLights[i].color.b))
+                        var specpow = Math.max(0, Vector.dot(L, R))
+                        specpow = Math.pow(specpow, closestObject.specular_pow)
+                        var specl = Color.scale(specpow, scale)
+                        adc = Color.plus(adc, cont)
+                        if (Color.lightness(specl) > Color.lightness(msc)) {
+                            msc = specl
+                        } else {
+                            msc = msc
+                        }
+                    }
+                }
+                adc = Color.scale(1 / vecs.length, adc)
+                var sum = Color.plus(adc, msc)
+                aLight = Color.plus(aLight, sum)
+            }
+            var ambientCol = ambientLight.color
+            var ki = Color.scale(closestObject.k_ambient, ambientCol)
+            ki = Color.times(ki, new Color(closestObject.dr, closestObject.dg, closestObject.db))
+            pixelColor = Color.plus(ki, light)
+            if (areaLights.length > 0) {
+                pixelColor = Color.plus(pixelColor, aLight)
+            }
+        }
+        return pixelColor;
     }
 
     // draw_scene is provided to create the image from the ray traced colors. 
